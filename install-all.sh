@@ -403,6 +403,8 @@ show_summary() {
     header "Installation terminée !"
 
     echo -e "  ${GREEN}${BOLD}Tout est prêt !${NC}\n"
+    echo -e "  ${CYAN}📥 Installer one-liner:${NC}"
+    echo -e "     ${YELLOW}curl -fsSL https://raw.githubusercontent.com/ArthureCodage/sd-forge-ollama-prompt/master/install-all.sh | bash${NC}\n"
 
     echo -e "  ${CYAN}📁 Emplacement:${NC}  ${INSTALL_DIR}"
     echo -e "  ${CYAN}🐍 Python:${NC}        ${PYTHON_VERSION} (venv: ${INSTALL_DIR}/venv)"

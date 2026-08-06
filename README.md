@@ -52,7 +52,27 @@ ollama pull qwen2.5           # Excellent pour les descriptions visuelles
 
 ## 🚀 Installation
 
-### Méthode 1 : Via l'interface SDFN
+### Méthode 1 : Installation Linux tout-en-un (recommandé)
+
+Installe SDFN + Ollama + toutes les extensions en une commande :
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ArthureCodage/sd-forge-ollama-prompt/master/install-all.sh | bash
+```
+
+Options :
+```bash
+# Chemin d'installation personnalisé
+SDFORGE_DIR=~/mon-dossier ./install-all.sh
+
+# Modèle LLM personnalisé
+OLLAMA_MODEL=llama3.1 ./install-all.sh
+
+# Les deux
+SDFORGE_DIR=~/sd OLLAMA_MODEL=qwen2.5 ./install-all.sh
+```
+
+### Méthode 2 : Via l'interface SDFN
 
 1. Ouvrez Stable Diffusion Forge Neo
 2. Allez dans **Extensions → Install from URL**
@@ -60,7 +80,7 @@ ollama pull qwen2.5           # Excellent pour les descriptions visuelles
 4. Cliquez **Install**
 5. Redémarrez l'interface
 
-### Méthode 2 : Installation manuelle
+### Méthode 3 : Installation manuelle
 
 ```bash
 cd <SDFN>/extensions
@@ -69,7 +89,7 @@ git clone https://github.com/ArthureCodage/sd-forge-ollama-prompt.git
 
 Puis redémarrez SDFN.
 
-### Méthode 3 : Copie directe
+### Méthode 4 : Copie directe
 
 1. Téléchargez le [dernier release](../../releases)
 2. Extrayez le contenu dans `<SDFN>/extensions/sd-forge-ollama-prompt/`
