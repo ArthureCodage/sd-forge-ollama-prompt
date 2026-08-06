@@ -102,6 +102,10 @@ install_system_deps() {
 
     local common_deps="git curl wget ca-certificates build-essential"
 
+    # Detect Python major.minor for versioned packages
+    local py_major_minor
+    py_major_minor=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+
     case "$distro" in
         ubuntu|debian|linuxmint|pop)
             sudo apt-get update -qq
@@ -109,6 +113,8 @@ install_system_deps() {
                 software-properties-common \
                 ${common_deps} \
                 python3 python3-venv python3-dev python3-pip \
+                "python3-${py_major_minor}-venv" \
+                "python3-distutils" \
                 libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
                 libglfw3 libglfw3-dev \
                 ffmpeg \
@@ -159,15 +165,34 @@ setup_python() {
     cd "$INSTALL_DIR"
 
     # Create venv
-    if [[ -f "venv/bin/activate" ]]; then
+    if [[ -f "venv/bin/activate" ]] && [[ -f "venv/bin/pip" ]]; then
         info "Venv existant trouvé"
     else
         info "Création du venv..."
-        $py_cmd -m venv venv
-        success "Venv créé"
+
+        # Remove broken venv if exists
+        rm -rf venv
+
+        # Try standard venv creation
+        if $py_cmd -m venv venv 2>/dev/null; then
+            success "Venv créé (standard)"
+        else
+            warn "ensurepip non disponible — fallback method..."
+            $py_cmd -m venv --without-pip venv
+            curl -fsSL https://bootstrap.pypa.io/get-pip.py | $py_cmd
+            rm -f get-pip.py
+            success "Venv créé (fallback get-pip)"
+        fi
     fi
 
     source venv/bin/activate
+
+    # Verify pip is available
+    if ! check_command pip; then
+        warn "pip manquant dans le venv — installation..."
+        curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3
+        rm -f get-pip.py
+    fi
 
     # Upgrade pip
     info "Mise à jour de pip..."
