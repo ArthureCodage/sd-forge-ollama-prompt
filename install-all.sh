@@ -166,32 +166,53 @@ setup_python() {
 
     # Create venv
     if [[ -f "venv/bin/activate" ]] && [[ -f "venv/bin/pip" ]]; then
-        info "Venv existant trouvé"
+        info "Venv existant trouvé avec pip"
     else
-        info "Création du venv..."
-
         # Remove broken venv if exists
         rm -rf venv
 
-        # Try standard venv creation
-        if $py_cmd -m venv venv 2>/dev/null; then
-            success "Venv créé (standard)"
+        info "Création du venv (Python ${py_major_minor})..."
+
+        # Method 1: Try python3-venv module directly
+        if $py_cmd -m venv venv 2>/tmp/venv_err.log; then
+            success "Venv créé"
         else
-            warn "ensurepip non disponible — fallback method..."
-            $py_cmd -m venv --without-pip venv
-            curl -fsSL https://bootstrap.pypa.io/get-pip.py | $py_cmd
-            rm -f get-pip.py
-            success "Venv créé (fallback get-pip)"
+            warn "venv module failed: $(head -1 /tmp/venv_err.log)"
+
+            # Method 2: Try installing venv deps and retry
+            warn "Tentative d'installation des deps manquantes..."
+            if [[ "$distro" == "ubuntu" ]] || [[ "$distro" == "debian" ]]; then
+                sudo apt-get install -y -qq "python3-${py_major_minor}-venv" python3-distutils 2>/dev/null || \
+                sudo apt-get install -y -qq python3-venv python3-distutils 2>/dev/null || true
+            fi
+
+            if $py_cmd -m venv venv 2>/tmp/venv_err2.log; then
+                success "Venv créé (après install deps)"
+            else
+                # Method 3: Create venv without pip, then bootstrap pip
+                warn "Fallback: venv sans pip + bootstrap..."
+                $py_cmd -m venv --without-pip venv 2>/dev/null || \
+                virtualenv --python="$py_cmd" venv 2>/dev/null || \
+                { error "Impossible de créer le venv. Installez python3-venv manuellement."; exit 1; }
+
+                # Bootstrap pip into the venv
+                info "Installation de pip dans le venv..."
+                curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+                "$INSTALL_DIR/venv/bin/python3" /tmp/get-pip.py --quiet 2>&1 | tail -1
+                rm -f /tmp/get-pip.py
+                success "Venv + pip installés (fallback)"
+            fi
         fi
     fi
 
     source venv/bin/activate
 
-    # Verify pip is available
-    if ! check_command pip; then
-        warn "pip manquant dans le venv — installation..."
-        curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3
-        rm -f get-pip.py
+    # Final pip check
+    if ! python3 -c "import pip" 2>/dev/null; then
+        warn "pip toujours manquant — dernière tentative..."
+        curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+        python3 /tmp/get-pip.py --quiet 2>&1 | tail -1
+        rm -f /tmp/get-pip.py
     fi
 
     # Upgrade pip
