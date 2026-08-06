@@ -1,0 +1,3 @@
+# Aucune dépendance externe requise
+# urllib fait partie de la bibliothèque standard Python
+# gradio est fourni par Stable Diffusion Forge Neo

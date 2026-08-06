@@ -1,0 +1,15 @@
+#ollama_prompt_tab {
+    padding: 10px;
+}
+
+#ollama_prompt_tab .gradio-textbox textarea {
+    font-family: 'Courier New', monospace;
+}
+
+.ollama-status-connected {
+    color: #4caf50 !important;
+}
+
+.ollama-status-error {
+    color: #f44336 !important;
+}
