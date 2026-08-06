@@ -54,22 +54,24 @@ ollama pull qwen2.5           # Excellent pour les descriptions visuelles
 
 ### Méthode 1 : Installation Linux tout-en-un (recommandé)
 
-Installe SDFN + Ollama + toutes les extensions en une commande :
+Installe **tout** sur un Linux fraîchement installé — dépendances système, Ollama, SDFN, et les deux extensions en une seule commande :
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ArthureCodage/sd-forge-ollama-prompt/master/install-all.sh | bash
 ```
 
-Options :
+Le script détecte automatiquement la distribution (Ubuntu, Debian, Fedora, Arch) et installe tout.
+
+**Options :**
 ```bash
-# Chemin d'installation personnalisé
-SDFORGE_DIR=~/mon-dossier ./install-all.sh
+# Chemin personnalisé
+curl -fsSL ... | bash -s -- --dir ~/mon-sd-forge
 
 # Modèle LLM personnalisé
-OLLAMA_MODEL=llama3.1 ./install-all.sh
+curl -fsSL ... | bash -s -- --model llama3.2-vision
 
-# Les deux
-SDFORGE_DIR=~/sd OLLAMA_MODEL=qwen2.5 ./install-all.sh
+# Mode auto (pas d'interaction)
+curl -fsSL ... | bash -s -- --yes
 ```
 
 ### Méthode 2 : Via l'interface SDFN

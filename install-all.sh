@@ -1,38 +1,33 @@
 #!/usr/bin/env bash
 #
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  SD-Forge Neo — Full Installer for Linux
+#  SD-Forge Neo — Fresh Linux Full Installer
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
-#  Installs in one go:
-#    1. Ollama (local LLM server)
-#    2. Stable Diffusion Forge Neo (SDFN)
-#    3. sd-forge-ollama-prompt (auto prompt generation via Ollama)
-#    4. sd-forge-civitai-helper (CivitAI model downloader)
+#  One-liner:
+#    curl -fsSL https://raw.githubusercontent.com/ArthureCodage/sd-forge-ollama-prompt/master/install-all.sh | bash
 #
-#  Usage:
-#    chmod +x install-all.sh
-#    ./install-all.sh
+#  Or with custom options:
+#    curl -fsSL ... | bash -s -- --model llama3.2-vision --dir ~/sd-forge
 #
-#  Or with custom install path:
-#    SDFORGE_DIR=~/sd-forge ./install-all.sh
+#  Does EVERYTHING on a fresh Linux box:
+#    System deps → Ollama → SDFN → Extensions → Ready to create
 #
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 set -euo pipefail
 
-# ─── Configuration ────────────────────────────────────────────────────────────
+# ─── Defaults ─────────────────────────────────────────────────────────────────
 
 INSTALL_DIR="${SDFORGE_DIR:-$HOME/sd-forge-neo}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2-vision}"
 SDFORGE_REPO="https://github.com/Haoming02/sd-webui-forge-classic.git"
 SDFORGE_BRANCH="neo"
 EXT_OLLAMA_PROMPT="https://github.com/ArthureCodage/sd-forge-ollama-prompt.git"
 EXT_CIVITAI_HELPER="https://github.com/ArthureCodage/sd-forge-civitai-helper.git"
+AUTO_YES=false
 
-OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2}"
-PYTHON_MIN_VERSION="3.10"
-
-# ─── Colors & formatting ──────────────────────────────────────────────────────
+# ─── Colors ───────────────────────────────────────────────────────────────────
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -40,14 +35,48 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
 success() { echo -e "${GREEN}[✓]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
 error()   { echo -e "${RED}[✗]${NC} $*"; }
 header()  { echo -e "\n${BOLD}${CYAN}━━━ $* ━━━${NC}\n"; }
-step()    { echo -e "\n${BOLD}▸ $1${NC}"; }
+step()    { echo -e "\n${BOLD}▸ $*${NC}"; }
+
+# ─── Parse args ───────────────────────────────────────────────────────────────
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dir)       INSTALL_DIR="$2"; shift 2 ;;
+            --model)     OLLAMA_MODEL="$2"; shift 2 ;;
+            --yes|-y)    AUTO_YES=true; shift ;;
+            --help|-h)
+                echo "Usage: $0 [--dir PATH] [--model MODEL] [--yes]"
+                exit 0
+                ;;
+            *) shift ;;
+        esac
+    done
+}
+
+# ─── Detect distro ────────────────────────────────────────────────────────────
+
+detect_distro() {
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        echo "${ID,,}"
+    elif check_command apt-get; then
+        echo "debian"
+    elif check_command dnf; then
+        echo "fedora"
+    elif check_command pacman; then
+        echo "arch"
+    else
+        echo "unknown"
+    fi
+}
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -55,229 +84,200 @@ check_command() {
     command -v "$1" &>/dev/null
 }
 
-version_ge() {
-    # Returns 0 if $1 >= $2
-    printf '%s\n%s\n' "$2" "$1" | sort -V -C
+confirm_or_skip() {
+    if $AUTO_YES; then return 0; fi
+    local prompt="${1:-Continuer ?} [O/n] "
+    read -rp "$prompt" answer
+    [[ "${answer,,}" != "n" ]]
 }
 
-confirm_or_default() {
-    local prompt="$1"
-    local default="$2"
-    read -rp "$prompt [$default]: " answer
-    echo "${answer:-$default}"
+# ─── 1. System Dependencies ──────────────────────────────────────────────────
+
+install_system_deps() {
+    header "1/6 — Dépendances système"
+
+    local distro
+    distro=$(detect_distro)
+    info "Distribution détectée: ${distro}"
+
+    local common_deps="git curl wget ca-certificates build-essential"
+
+    case "$distro" in
+        ubuntu|debian|linuxmint|pop)
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq \
+                software-properties-common \
+                ${common_deps} \
+                python3 python3-venv python3-dev python3-pip \
+                libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
+                libglfw3 libglfw3-dev \
+                ffmpeg \
+                2>&1 | tail -5
+            ;;
+        fedora|rhel|centos)
+            sudo dnf install -y -q \
+                ${common_deps} \
+                python3 python3-devel python3-virtualenv \
+                mesa-libGL glib2 libSM libXext libXrender \
+                glfw glfw-devel \
+                ffmpeg \
+                2>&1 | tail -5
+            ;;
+        arch|manjaro|endeavouros)
+            sudo pacman -Syu --noconfirm --quiet \
+                base-devel \
+                ${common_deps} \
+                python python-virtualenv \
+                mesa glib2 libsm libxext libxrender \
+                glfw-x11 \
+                ffmpeg \
+                2>&1 | tail -5
+            ;;
+        *)
+            warn "Distribution non reconnue — skip des deps système"
+            warn "Installez manuellement: git, python3, python3-venv, curl, mesa-libGL"
+            ;;
+    esac
+
+    success "Dépendances système installées"
 }
 
-# ─── Pre-flight checks ────────────────────────────────────────────────────────
+# ─── 2. Python Environment ────────────────────────────────────────────────────
 
-preflight() {
-    header "Pré-installation — Vérification du système"
+setup_python() {
+    header "2/6 — Environnement Python"
 
-    local errors=0
+    local py_cmd="python3"
 
-    # Check OS
-    if [[ "$(uname -s)" != "Linux" ]]; then
-        error "Ce script est conçu pour Linux uniquement."
-        error "For other OS, please install manually."
-        ((errors++))
+    # Check Python version
+    local py_version
+    py_version=$($py_cmd --version 2>&1 | awk '{print $2}')
+    info "Python ${py_version} détecté"
+
+    # Create install directory
+    mkdir -p "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+
+    # Create venv
+    if [[ -f "venv/bin/activate" ]]; then
+        info "Venv existant trouvé"
     else
-        info "Système: $(uname -s) $(uname -r) ($(uname -m))"
+        info "Création du venv..."
+        $py_cmd -m venv venv
+        success "Venv créé"
     fi
 
-    # Check Python
-    if check_command python3; then
-        PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
-        if version_ge "$PYTHON_VERSION" "$PYTHON_MIN_VERSION"; then
-            success "Python $PYTHON_VERSION détecté"
-        else
-            error "Python $PYTHON_VERSION trouvé. Minimum requis: $PYTHON_MIN_VERSION"
-            ((errors++))
-        fi
-    else
-        error "Python3 non trouvé. Installez Python $PYTHON_MIN_VERSION+ d'abord."
-        ((errors++))
-    fi
+    source venv/bin/activate
 
-    # Check pip
-    if check_command pip3 || python3 -m pip --version &>/dev/null; then
-        success "pip disponible"
-    else
-        warn "pip non trouvé — sera installé avec le venv"
-    fi
-
-    # Check git
-    if check_command git; then
-        success "Git $(git --version | awk '{print $3}')"
-    else
-        error "Git non trouvé. Installez-le: sudo apt install git"
-        ((errors++))
-    fi
-
-    # Check GPU (optional but recommended)
-    if check_command nvidia-smi; then
-        GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
-        success "GPU NVIDIA détecté: $GPU_INFO"
-    elif check_command rocminfo 2>/dev/null; then
-        success "GPU AMD détecté (ROCm)"
-    else
-        warn "Aucun GPU détecté. SDFN fonctionnera en mode CPU (très lent)."
-    fi
-
-    # Check disk space (need at least 20GB free)
-    AVAIL_GB=$(df -BG "$HOME" | awk 'NR==2 {print $4}' | tr -d 'G')
-    if [[ "$AVAIL_GB" -ge 20 ]]; then
-        success "Espace disque: ${AVAIL_GB}GB disponible"
-    else
-        warn "Espace disque faible: ${AVAIL_GB}GB (20GB+ recommandé)"
-    fi
-
-    # Check RAM
-    TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
-    if [[ "$TOTAL_RAM" -ge 8 ]]; then
-        success "RAM: ${TOTAL_RAM}GB"
-    else
-        warn "RAM: ${TOTAL_RAM}GB (8GB+ recommandé pour SDFN)"
-    fi
-
-    if [[ $errors -gt 0 ]]; then
-        echo ""
-        error "$errors erreur(s) bloquante(s). Corrigez-les avant de continuer."
-        exit 1
-    fi
-
-    echo ""
-    success "Vérifications passées !"
+    # Upgrade pip
+    info "Mise à jour de pip..."
+    pip install --upgrade pip wheel setuptools -q 2>&1 | tail -1
+    success "pip à jour ($(pip --version | awk '{print $2}'))"
 }
 
-# ─── Install Ollama ───────────────────────────────────────────────────────────
+# ─── 3. Install Ollama ───────────────────────────────────────────────────────
 
 install_ollama() {
-    header "1/4 — Installation d'Ollama"
+    header "3/6 — Installation d'Ollama"
 
     if check_command ollama; then
-        OLLAMA_VERSION=$(ollama --version 2>&1 | awk '{print $3}' || echo "unknown")
-        success "Ollama déjà installé (v${OLLAMA_VERSION})"
+        local ver
+        ver=$(ollama --version 2>&1 | grep -oP 'version is \K[0-9.]+' || echo "unknown")
+        success "Ollama déjà installé (v${ver})"
     else
-        info "Installation d'Ollama via le script officiel..."
+        info "Installation d'Ollama..."
         curl -fsSL https://ollama.com/install.sh | sh
 
-        if check_command ollama; then
-            success "Ollama installé avec succès"
-        else
-            error "Échec de l'installation d'Ollama"
+        if ! check_command ollama; then
+            error "Échec installation Ollama"
             exit 1
         fi
+        success "Ollama installé"
     fi
 
-    # Start Ollama service
+    # Start service
     step "Démarrage du service Ollama"
-
     if systemctl is-active --quiet ollama 2>/dev/null; then
-        info "Service Ollama déjà actif"
+        info "Service déjà actif"
     else
-        info "Activation du service Ollama..."
         sudo systemctl enable ollama 2>/dev/null || true
         sudo systemctl start ollama 2>/dev/null || true
 
-        # Fallback: start in background if systemd not available
         if ! systemctl is-active --quiet ollama 2>/dev/null; then
-            info "Démarrage d'Ollama en arrière-plan..."
             nohup ollama serve > /tmp/ollama.log 2>&1 &
-            sleep 3
+            sleep 5
         fi
     fi
 
-    # Wait for Ollama to be ready
-    info "Attente qu'Ollama soit prêt..."
+    # Wait for ready
     local retries=0
     while ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; do
         sleep 2
         ((retries++))
-        if [[ $retries -gt 30 ]]; then
-            error "Ollama ne répond pas après 60 secondes"
-            error "Vérifiez les logs: journalctl -u ollama"
-            exit 1
-        fi
+        [[ $retries -gt 30 ]] && { error "Ollama ne répond pas"; exit 1; }
     done
-    success "Ollama est opérationnel (http://localhost:11434)"
+    success "Ollama opérationnel (http://localhost:11434)"
 
     # Pull model
-    step "Téléchargement du modèle LLM: ${OLLAMA_MODEL}"
+    step "Téléchargement du modèle: ${OLLAMA_MODEL}"
 
-    if ollama list 2>/dev/null | grep -q "$OLLAMA_MODEL"; then
+    if ollama list 2>/dev/null | grep -q "${OLLAMA_MODEL%%:*}"; then
         info "Modèle ${OLLAMA_MODEL} déjà présent"
     else
-        info "Téléchargement de ${OLLAMA_MODEL} (peut prendre plusieurs minutes)..."
+        info "Téléchargement en cours (peut prendre 5-15 min)..."
         ollama pull "$OLLAMA_MODEL"
         success "Modèle ${OLLAMA_MODEL} téléchargé"
     fi
 }
 
-# ─── Install SDFN ─────────────────────────────────────────────────────────────
+# ─── 4. Install SDFN ─────────────────────────────────────────────────────────
 
 install_sdfn() {
-    header "2/4 — Installation de Stable Diffusion Forge Neo"
+    header "4/6 — Installation de Stable Diffusion Forge Neo"
 
-    if [[ -d "$INSTALL_DIR" ]]; then
-        info "Dossier ${INSTALL_DIR} existant"
+    cd "$INSTALL_DIR"
 
-        if [[ -d "$INSTALL_DIR/.git" ]]; then
-            info "Mise à jour du repo SDFN..."
-            cd "$INSTALL_DIR"
-            git fetch origin
-            git checkout "$SDFORGE_BRANCH" 2>/dev/null || true
-            git pull origin "$SDFORGE_BRANCH" 2>/dev/null || true
-            success "SDFN mis à jour (branche: ${SDFORGE_BRANCH})"
-        else
-            warn "Dossier non-git trouvé. Sauvegarde et re-clone..."
-            mv "$INSTALL_DIR" "${INSTALL_DIR}.backup.$(date +%s)"
-            clone_sdfn
-        fi
+    # Clone or update
+    if [[ -d ".git" ]]; then
+        info "SDFN déjà cloné — mise à jour..."
+        git fetch origin
+        git checkout "$SDFORGE_BRANCH" 2>/dev/null || true
+        git pull origin "$SDFORGE_BRANCH" 2>/dev/null || true
+        success "SDFN à jour (branche: ${SDFORGE_BRANCH})"
+    elif [[ -d "webui.py" ]] || [[ $(ls -A | wc -l) -gt 1 ]]; then
+        warn "Dossier non vide trouné — backup et re-clone"
+        local backup="${INSTALL_DIR}.backup.$(date +%s)"
+        mkdir -p "$backup"
+        cp -r "$INSTALL_DIR"/* "$backup/" 2>/dev/null || true
+        rm -rf "${INSTALL_DIR:?}/"*
+        clone_sdfn
     else
         clone_sdfn
     fi
 
-    # Create virtual environment
-    step "Environnement Python"
+    # Install PyTorch
+    step "Installation de PyTorch (CUDA)"
+    source venv/bin/activate
 
-    if [[ -f "$INSTALL_DIR/venv/bin/activate" ]]; then
-        info "Venv existant trouvé"
-    else
-        info "Création de l'environnement virtuel..."
-        python3 -m venv "$INSTALL_DIR/venv"
-        success "Venv créé"
-    fi
-
-    source "$INSTALL_DIR/venv/bin/activate"
-
-    # Upgrade pip
-    info "Mise à jour de pip..."
-    pip install --upgrade pip wheel setuptools -q
-    success "pip à jour"
-
-    # Install torch with GPU support
-    step "Installation de PyTorch"
-
-    if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+    if python3 -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
         info "PyTorch avec CUDA déjà installé"
-    elif python3 -c "import torch" 2>/dev/null; then
-        warn "PyTorch installé sans CUDA — réinstallation..."
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
     else
-        info "Installation de PyTorch (CUDA 12.1)..."
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+        info "Installation de PyTorch + CUDA 12.1..."
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
+            --progress-bar on 2>&1 | tail -3
+        success "PyTorch installé"
     fi
 
     # Install SDFN requirements
-    step "Installation des dépendances SDFN"
-    cd "$INSTALL_DIR"
-
+    step "Installation des dépendances SDFN (5-10 min)"
     if [[ -f "requirements_versions.txt" ]]; then
-        pip install -r requirements_versions.txt --progress-bar on
-    elif [[ -f "requirements.txt" ]]; then
-        pip install -r requirements.txt --progress-bar on
+        pip install -r requirements_versions.txt --progress-bar on 2>&1 | tail -3
+    fi
+    if [[ -f "requirements.txt" ]]; then
+        pip install -r requirements.txt --progress-bar on 2>&1 | tail -3
     fi
 
-    success "Dépendances SDFN installées"
+    success "SDFN prêt"
 }
 
 clone_sdfn() {
@@ -286,200 +286,151 @@ clone_sdfn() {
     success "SDFN cloné dans ${INSTALL_DIR}"
 }
 
-# ─── Install Extensions ───────────────────────────────────────────────────────
+# ─── 5. Install Extensions ────────────────────────────────────────────────────
 
 install_extensions() {
-    header "3/4 — Installation des extensions"
+    header "5/6 — Installation des extensions"
 
-    local ext_dir="${INSTALL_DIR}/extensions"
-    mkdir -p "$ext_dir"
+    mkdir -p "${INSTALL_DIR}/extensions"
 
-    # Extension 1: Ollama Prompt
-    step "sd-forge-ollama-prompt"
-    install_single_extension \
-        "$EXT_OLLAMA_PROMPT" \
-        "sd-forge-ollama-prompt" \
-        "$ext_dir"
-
-    # Extension 2: CivitAI Helper
-    step "sd-forge-civitai-helper"
-    install_single_extension \
-        "$EXT_CIVITAI_HELPER" \
-        "sd-forge-civitai-helper" \
-        "$ext_dir"
-}
-
-install_single_extension() {
-    local repo_url="$1"
-    local folder_name="$2"
-    local parent_dir="$3"
-    local target="${parent_dir}/${folder_name}"
-
-    if [[ -d "$target" ]]; then
-        info "${folder_name} déjà présent — mise à jour..."
-        cd "$target"
-        git pull 2>/dev/null || warn "Mise à jour impossible (repo local modifié?)"
-        success "${folder_name} à jour"
+    # Ollama Prompt
+    if [[ -d "${INSTALL_DIR}/extensions/sd-forge-ollama-prompt" ]]; then
+        info "sd-forge-ollama-prompt: mise à jour..."
+        cd "${INSTALL_DIR}/extensions/sd-forge-ollama-prompt" && git pull 2>/dev/null || true
     else
-        info "Clonage de ${folder_name}..."
-        git clone --depth 1 "$repo_url" "$target"
-        success "${folder_name} installé"
+        info "sd-forge-ollama-prompt: installation..."
+        git clone --depth 1 "$EXT_OLLAMA_PROMPT" "${INSTALL_DIR}/extensions/sd-forge-ollama-prompt"
     fi
+    success "sd-forge-ollama-prompt OK"
+
+    # CivitAI Helper
+    if [[ -d "${INSTALL_DIR}/extensions/sd-forge-civitai-helper" ]]; then
+        info "sd-forge-civitai-helper: mise à jour..."
+        cd "${INSTALL_DIR}/extensions/sd-forge-civitai-helper" && git pull 2>/dev/null || true
+    else
+        info "sd-forge-civitai-helper: installation..."
+        git clone --depth 1 "$EXT_CIVITAI_HELPER" "${INSTALL_DIR}/extensions/sd-forge-civitai-helper"
+    fi
+    success "sd-forge-civitai-helper OK"
+
+    # Run extension install.py if present
+    for ext in "${INSTALL_DIR}/extensions/"*/install.py; do
+        if [[ -f "$ext" ]]; then
+            info "Exécution de ${ext}..."
+            python3 "$ext" 2>&1 | tail -3 || warn "install.py a échoué (non-critique)"
+        fi
+    done
 }
 
-# ─── Create launcher script ───────────────────────────────────────────────────
+# ─── 6. Create Launcher ───────────────────────────────────────────────────────
 
 create_launcher() {
-    header "4/4 — Création du lanceur"
+    header "6/6 — Création du lanceur"
 
-    local launcher="${INSTALL_DIR}/start.sh"
-
-    cat > "$launcher" << 'LAUNCHER_EOF'
+    cat > "${INSTALL_DIR}/start.sh" << LAUNCHER
 #!/usr/bin/env bash
-#
-#  SD-Forge Neo — Quick Launcher
-#
-
+# SD-Forge Neo — Quick Launcher
 set -euo pipefail
+cd "\$(dirname "\$0")"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Démarrage de SD-Forge Neo"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Check Ollama
+# Check/start Ollama
 if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-    echo "[INFO] Ollama non démarré — tentative de démarrage..."
+    echo "[*] Ollama non démarré..."
     if systemctl is-enabled ollama &>/dev/null; then
         sudo systemctl start ollama
     else
         nohup ollama serve > /tmp/ollama.log 2>&1 &
     fi
-    sleep 3
+    sleep 5
 fi
 
 if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
     echo "[✓] Ollama opérationnel"
 else
-    echo "[!] Ollama ne répond pas — l'extension Ollama Prompt ne fonctionnera pas"
+    echo "[!] Ollama ne répond pas"
 fi
 
 # Activate venv and launch
 source venv/bin/activate
+echo "[*] Lancement de SDFN...\n"
 
-echo "[*] Lancement de SDFN..."
-echo ""
+python webui.py \\
+    --api \\
+    --listen \\
+    --enable-insecure-extension-access \\
+    "\$@"
+LAUNCHER
 
-# Launch with recommended flags
-python webui.py \
-    --api \
-    --listen \
-    --enable-insecure-extension-access \
-    "$@"
-LAUNCHER_EOF
+    chmod +x "${INSTALL_DIR}/start.sh"
 
-    chmod +x "$launcher"
+    # Bash alias suggestion
+    local shell_rc="$HOME/.bashrc"
+    [[ "$SHELL" == */zsh ]] && shell_rc="$HOME/.zshrc"
 
-    # Create Ollama-only launcher
-    local ollama_launcher="${INSTALL_DIR}/start-ollama.sh"
-    cat > "$ollama_launcher" << 'OLLAMA_EOF'
-#!/usr/bin/env bash
-# Quick start Ollama only
-echo "Démarrage d'Ollama..."
-ollama serve
-OLLAMA_EOF
-    chmod +x "$ollama_launcher"
+    if ! grep -q "alias sdfn=" "$shell_rc" 2>/dev/null; then
+        echo "" >> "$shell_rc"
+        echo "# SD-Forge Neo" >> "$shell_rc"
+        echo "alias sdfn='cd ${INSTALL_DIR} && ./start.sh'" >> "$shell_rc"
+        info "Alias ajouté: tapez 'sdfn' pour démarrer"
+    fi
 
-    success "Lanceurs créés:"
-    info "  ${INSTALL_DIR}/start.sh          — Lancer SDFN"
-    info "  ${INSTALL_DIR}/start-ollama.sh   — Lancer Ollama seul"
+    success "Lanceur créé: ${INSTALL_DIR}/start.sh"
 }
 
-# ─── Final summary ────────────────────────────────────────────────────────────
+# ─── Summary ──────────────────────────────────────────────────────────────────
 
 show_summary() {
-    header "Installation terminée !"
+    header "🎉 Installation terminée !"
 
     echo -e "  ${GREEN}${BOLD}Tout est prêt !${NC}\n"
-    echo -e "  ${CYAN}📥 Installer one-liner:${NC}"
-    echo -e "     ${YELLOW}curl -fsSL https://raw.githubusercontent.com/ArthureCodage/sd-forge-ollama-prompt/master/install-all.sh | bash${NC}\n"
-
     echo -e "  ${CYAN}📁 Emplacement:${NC}  ${INSTALL_DIR}"
-    echo -e "  ${CYAN}🐍 Python:${NC}        ${PYTHON_VERSION} (venv: ${INSTALL_DIR}/venv)"
     echo -e "  ${CYAN}🤖 Ollama:${NC}        http://localhost:11434 (modèle: ${OLLAMA_MODEL})"
     echo -e "  ${CYAN}🧩 Extensions:${NC}"
-    echo -e "     • sd-forge-ollama-prompt  (génération de prompts)"
-    echo -e "     • sd-forge-civitai-helper (download CivitAI)"
+    echo -e "     • sd-forge-ollama-prompt  — Génération auto de prompts"
+    echo -e "     • sd-forge-civitai-helper — Download/scan modèles CivitAI"
     echo ""
-
     echo -e "  ${BOLD}Pour démarrer:${NC}\n"
     echo -e "     ${YELLOW}cd ${INSTALL_DIR}${NC}"
     echo -e "     ${YELLOW}./start.sh${NC}"
     echo ""
-
-    echo -e "  ${BOLD}Ou avec des flags personnalisés:${NC}\n"
+    echo -e "  ${BOLD}Ou via alias (après un source ~/.bashrc):${NC}"
+    echo -e "     ${YELLOW}sdfn${NC}"
+    echo ""
+    echo -e "  ${BOLD}Flags utiles:${NC}"
     echo -e "     ${YELLOW}./start.sh --xformers --autolaunch --theme dark${NC}"
     echo ""
-
-    echo -e "  ${BOLD}Accès interface:${NC}"
-    echo -e "     🌐 Local:    ${CYAN}http://localhost:7860${NC}"
-    echo -e "     🌐 Réseau:   ${CYAN}http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo '0.0.0.0'):7860${NC}"
-    echo ""
-
-    echo -e "  ${BOLD}Utilisation de l'extension Ollama Prompt:${NC}"
-    echo -e "     1. Ouvrez l'onglet '${CYAN}Ollama Prompt${NC}' dans SDFN"
-    echo -e "     2. Cliquez '${CYAN}Tester${NC}' pour vérifier la connexion"
-    echo -e "     3. Entrez un thème et générez votre prompt !"
-    echo ""
-
-    echo -e "  ${BOLD}Raccourci bash (optionnel):${NC}\n"
-    echo -e "     echo 'alias sdfn=\"cd ${INSTALL_DIR} && ./start.sh\"' >> ~/.bashrc"
-    echo -e "     ${YELLOW}source ~/.bashrc${NC}"
-    echo -e "     ${YELLOW}sdfn${NC}  # lance tout !"
-    echo ""
-
-    echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "  ${GREEN}Bonne création ! 🎨${NC}\n"
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-    clear
+    parse_args "$@"
 
+    clear
     echo ""
     echo -e "  ${BOLD}${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "  ${BOLD}${CYAN}║                                                              ║${NC}"
-    echo -e "  ${BOLD}${CYAN}║   SD-Forge Neo — Installateur Complet                        ║${NC}"
+    echo -e "  ${BOLD}${CYAN}║   SD-Forge Neo — Fresh Linux Installer                       ║${NC}"
     echo -e "  ${BOLD}${CYAN}║   ─────────────────────────────────                         ║${NC}"
-    echo -e "  ${BOLD}${CYAN}║   Ollama + SDFN + Extensions                                 ║${NC}"
+    echo -e "  ${BOLD}${CYAN}║   Tout installe en une commande                             ║${NC}"
+    echo -e "  ${BOLD}${CYAN}║   Ubuntu / Debian / Fedora / Arch                            ║${NC}"
     echo -e "  ${BOLD}${CYAN}║                                                              ║${NC}"
     echo -e "  ${BOLD}${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-
-    # Prompt for install directory
-    INSTALL_DIR=$(confirm_or_default "Dossier d'installation" "$INSTALL_DIR")
-    INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"  # Expand ~
-
-    # Prompt for Ollama model
-    OLLAMA_MODEL=$(confirm_or_default "Modèle Ollama à télécharger" "$OLLAMA_MODEL")
-
-    echo ""
-    info "Résumé:"
-    info "  Installation: ${INSTALL_DIR}"
-    info "  Modèle LLM:   ${OLLAMA_MODEL}"
+    info "Dossier: ${INSTALL_DIR}"
+    info "Modèle:  ${OLLAMA_MODEL}"
     echo ""
 
-    read -rp "Continuer ? [O/n] " confirm
-    if [[ "${confirm,,}" == "n" ]]; then
-        echo "Annulé."
-        exit 0
-    fi
+    confirm_or_skip "Lancer l'installation ?" || exit 0
 
-    # Run installation steps
-    preflight
+    install_system_deps
+    setup_python
     install_ollama
     install_sdfn
     install_extensions
@@ -487,5 +438,4 @@ main() {
     show_summary
 }
 
-# Run
 main "$@"
