@@ -113,12 +113,18 @@ install_system_deps() {
                 software-properties-common \
                 ${common_deps} \
                 python3 python3-venv python3-dev python3-pip \
-                "python3-${py_major_minor}-venv" \
-                "python3-distutils" \
                 libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
                 libglfw3 libglfw3-dev \
                 ffmpeg \
                 2>&1 | tail -5
+
+            # Install versioned venv if different from default
+            if ! dpkg -l "python3-${py_major_minor}-venv" 2>/dev/null | grep -q "^ii"; then
+                info "Tentative d'installation de python${py_major_minor}-venv..."
+                sudo apt-get install -y -qq "python${py_major_minor}-venv" 2>/dev/null || \
+                sudo apt-get install -y -qq "python3-${py_major_minor}-venv" 2>/dev/null || \
+                warn "Paquet venv introuvable — utilisation du fallback get-pip"
+            fi
             ;;
         fedora|rhel|centos)
             sudo dnf install -y -q \
@@ -173,34 +179,58 @@ setup_python() {
 
         info "Création du venv (Python ${py_major_minor})..."
 
-        # Method 1: Try python3-venv module directly
-        if $py_cmd -m venv venv 2>/tmp/venv_err.log; then
+        # Method 1: Try standard venv
+        local venv_output
+        venv_output=$($py_cmd -m venv venv 2>&1) && venv_ok=true || venv_ok=false
+
+        if $venv_ok; then
             success "Venv créé"
         else
-            warn "venv module failed: $(head -1 /tmp/venv_err.log)"
+            warn "Methode 1 échouée: $(echo "$venv_output" | tail -1)"
 
-            # Method 2: Try installing venv deps and retry
-            warn "Tentative d'installation des deps manquantes..."
+            # Method 2: Install versioned venv package and retry
+            warn "Methode 2: installation python${py_major_minor}-venv..."
             if [[ "$distro" == "ubuntu" ]] || [[ "$distro" == "debian" ]]; then
-                sudo apt-get install -y -qq "python3-${py_major_minor}-venv" python3-distutils 2>/dev/null || \
-                sudo apt-get install -y -qq python3-venv python3-distutils 2>/dev/null || true
+                sudo apt-get install -y -qq "python${py_major_minor}-venv" 2>/dev/null || \
+                sudo apt-get install -y -qq "python3-${py_major_minor}-venv" 2>/dev/null || \
+                true
             fi
 
-            if $py_cmd -m venv venv 2>/tmp/venv_err2.log; then
-                success "Venv créé (après install deps)"
-            else
-                # Method 3: Create venv without pip, then bootstrap pip
-                warn "Fallback: venv sans pip + bootstrap..."
-                $py_cmd -m venv --without-pip venv 2>/dev/null || \
-                virtualenv --python="$py_cmd" venv 2>/dev/null || \
-                { error "Impossible de créer le venv. Installez python3-venv manuellement."; exit 1; }
+            venv_output=$($py_cmd -m venv venv 2>&1) && venv_ok=true || venv_ok=false
 
-                # Bootstrap pip into the venv
-                info "Installation de pip dans le venv..."
-                curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
-                "$INSTALL_DIR/venv/bin/python3" /tmp/get-pip.py --quiet 2>&1 | tail -1
-                rm -f /tmp/get-pip.py
-                success "Venv + pip installés (fallback)"
+            if $venv_ok; then
+                success "Venv créé (après install venv package)"
+            else
+                # Method 3: venv without pip + get-pip.py bootstrap
+                warn "Methode 3: venv --without-pip + bootstrap..."
+                warn "Erreur précédente: $(echo "$venv_output" | tail -1)"
+
+                rm -rf venv
+                if $py_cmd -m venv --without-pip venv 2>/dev/null; then
+                    info "Venv créé sans pip — bootstrap..."
+                else
+                    # Ultimate fallback: install virtualenv
+                    python3 -m pip install --quiet --user virtualenv 2>/dev/null || \
+                    sudo apt-get install -y -qq python3-virtualenv 2>/dev/null || true
+                    virtualenv --python="$py_cmd" venv 2>/dev/null || \
+                    { error "Impossible de créer le venv"; exit 1; }
+                fi
+
+                # Bootstrap pip into venv
+                info "Téléchargement et installation de pip..."
+                curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py 2>/dev/null
+                if [[ -f /tmp/get-pip.py ]]; then
+                    "$INSTALL_DIR/venv/bin/python3" /tmp/get-pip.py --quiet 2>&1 | tail -1
+                    rm -f /tmp/get-pip.py
+                fi
+
+                if [[ -f "$INSTALL_DIR/venv/bin/pip" ]] || [[ -f "$INSTALL_DIR/venv/bin/pip3" ]]; then
+                    success "Venv + pip installés (fallback complet)"
+                else
+                    error "Échec critique: pip non installable"
+                    error "Essayez manuellement: sudo apt install python3.12-venv"
+                    exit 1
+                fi
             fi
         fi
     fi
