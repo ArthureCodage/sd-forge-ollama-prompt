@@ -27,6 +27,9 @@ EXT_OLLAMA_PROMPT="https://github.com/ArthureCodage/sd-forge-ollama-prompt.git"
 EXT_CIVITAI_HELPER="https://github.com/ArthureCodage/sd-forge-civitai-helper.git"
 AUTO_YES=false
 
+# Global Python version (set during system deps install)
+PY_MAJOR_MINOR=""
+
 # ─── Colors ───────────────────────────────────────────────────────────────────
 
 RED='\033[0;31m'
@@ -102,9 +105,8 @@ install_system_deps() {
 
     local common_deps="git curl wget ca-certificates build-essential"
 
-    # Detect Python major.minor for versioned packages
-    local py_major_minor
-    py_major_minor=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    # Detect Python major.minor for versioned packages (global for use in setup_python)
+    PY_MAJOR_MINOR=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 
     case "$distro" in
         ubuntu|debian|linuxmint|pop)
@@ -118,12 +120,10 @@ install_system_deps() {
                 ffmpeg \
                 2>&1 | tail -5
 
-            # Install versioned venv if different from default
-            if ! dpkg -l "python3-${py_major_minor}-venv" 2>/dev/null | grep -q "^ii"; then
-                info "Tentative d'installation de python${py_major_minor}-venv..."
-                sudo apt-get install -y -qq "python${py_major_minor}-venv" 2>/dev/null || \
-                sudo apt-get install -y -qq "python3-${py_major_minor}-venv" 2>/dev/null || \
-                warn "Paquet venv introuvable — utilisation du fallback get-pip"
+            # Install versioned venv package for this specific Python version
+            if ! dpkg -l "python${PY_MAJOR_MINOR}-venv" 2>/dev/null | grep -q "^ii"; then
+                info "Installation de python${PY_MAJOR_MINOR}-venv..."
+                sudo apt-get install -y -qq "python${PY_MAJOR_MINOR}-venv" 2>/dev/null || true
             fi
             ;;
         fedora|rhel|centos)
@@ -177,7 +177,7 @@ setup_python() {
         # Remove broken venv if exists
         rm -rf venv
 
-        info "Création du venv (Python ${py_major_minor})..."
+        info "Création du venv (Python ${PY_MAJOR_MINOR})..."
 
         # Method 1: Try standard venv
         local venv_output
@@ -189,11 +189,9 @@ setup_python() {
             warn "Methode 1 échouée: $(echo "$venv_output" | tail -1)"
 
             # Method 2: Install versioned venv package and retry
-            warn "Methode 2: installation python${py_major_minor}-venv..."
+            warn "Methode 2: installation python${PY_MAJOR_MINOR}-venv..."
             if [[ "$distro" == "ubuntu" ]] || [[ "$distro" == "debian" ]]; then
-                sudo apt-get install -y -qq "python${py_major_minor}-venv" 2>/dev/null || \
-                sudo apt-get install -y -qq "python3-${py_major_minor}-venv" 2>/dev/null || \
-                true
+                sudo apt-get install -y -qq "python${PY_MAJOR_MINOR}-venv" 2>/dev/null || true
             fi
 
             venv_output=$($py_cmd -m venv venv 2>&1) && venv_ok=true || venv_ok=false
